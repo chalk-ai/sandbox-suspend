@@ -135,15 +135,24 @@ function saveToken(token) {
 
 await init();
 
-const term = new Terminal({ cursorBlink: true, fontSize: 13, scrollback: 5000, theme: THEME,
-                            fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace' });
-const fit = new FitAddon();
-term.loadAddon(fit);
-term.open($("term"));
-fit.observeResize();
-fit.fit();
-// Exposed for browser tests, which read the terminal buffer since ghostty draws to a canvas.
-window.term = term;
+// The terminal is created on the first launch or resume, not on load: opening it takes focus,
+// and focusing an embedded iframe on load would scroll the embedding page to it.
+let term = null;
+function ensureTerm() {
+  if (term) { term.reset(); return term; }
+  term = new Terminal({ cursorBlink: true, fontSize: 13, scrollback: 5000, theme: THEME,
+                        fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace' });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.open($("term"));
+  fit.observeResize();
+  fit.fit();
+  term.onData((data) => phase === "running" && ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "input", data })));
+  term.onResize(({ cols, rows }) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "resize", cols, rows })));
+  // Exposed for browser tests, which read the terminal buffer since ghostty draws to a canvas.
+  window.term = term;
+  return term;
+}
 
 let ws = null;
 let phase = "idle";  // idle | starting | running | suspending | suspended | resuming | ended
@@ -295,8 +304,6 @@ function doResume(source) {
 }
 
 $("actionBtn").addEventListener("click", () => (phase === "suspended" ? doResume("toolbar") : doSuspend()));
-term.onData((data) => phase === "running" && ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "input", data })));
-term.onResize(({ cols, rows }) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "resize", cols, rows })));
 
 // The empty state. Nothing connects until the visitor asks, so an embedding page does not start
 // sandboxes on load; a visitor who suspended and left gets a resume button instead.
@@ -313,7 +320,7 @@ function showLauncher(previous) {
   o.querySelector("[data-act=launch]").addEventListener("click", () => {
     saveToken(null);
     report("launch", "launch");
-    term.reset();
+    ensureTerm();
     for (const id of ["sSuspend", "sMemory", "sCold", "sResume"]) $(id).textContent = "–";
     setPhase("starting", "starting");
     showOverlay(`<div class="spinner"></div><p>Starting a fresh sandbox…</p>`);
@@ -321,7 +328,7 @@ function showLauncher(previous) {
   });
   o.querySelector("[data-act=saved]")?.addEventListener("click", () => {
     report("resume_saved", "saved");
-    term.reset();
+    ensureTerm();
     coldSince = Date.now();
     setPhase("resuming", "resuming…");
     showOverlay(`<div class="spinner"></div><p>Resuming your suspended sandbox…</p>`);
