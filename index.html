@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chalk Sandbox Suspend</title>
+<style>
+  /* Chalk marketing palette: green-1 ground, chartreuse primary, mint accents, ice for "cold". */
+  :root { --bg:#224A41; --term:#173029; --line:#32645B; --ink:#EFF5F3; --muted:#B9CFC7;
+          --accent:#BBD96D; --mint:#70CD96; --ice:#81CEEA; --warn:#F8947F;
+          --mono: ui-monospace,"SFMono-Regular",Menlo,Monaco,monospace; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+         display:flex; flex-direction:column; padding:24px; gap:12px; }
+  html.embed body { padding:0; gap:0; }
+  html.embed header { display:none; }
+  header h1 { font-size:22px; font-weight:500; margin:0; letter-spacing:-0.3px; }
+  header p { margin:4px 0 0; color:var(--muted); font-size:14px; }
+  .frame { position:relative; flex:1; min-height:380px; display:flex; flex-direction:column;
+           border:1px solid var(--line); border-radius:4px; overflow:hidden; background:var(--term); }
+  html.embed .frame { border:0; border-radius:0; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+            padding:8px 10px 8px 14px; background:var(--bg); border-bottom:1px solid var(--line);
+            font:12px/18px var(--mono); text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .left { display:flex; align-items:center; gap:10px; min-width:0; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--line); flex:none; }
+  .dot.running { background:var(--mint); box-shadow:0 0 0 3px rgba(112,205,150,.2); }
+  .dot.cold { background:var(--ice); box-shadow:0 0 0 3px rgba(129,206,234,.2); }
+  .dot.busy { background:var(--accent); animation:pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.3; } }
+  #stateLabel { color:var(--ink); }
+  #timer { color:var(--accent); }
+  .right { display:flex; align-items:center; gap:10px; }
+  button { font:13px/15px var(--mono); text-transform:uppercase; letter-spacing:.06em;
+           border:1px solid var(--accent); border-radius:20px; padding:12px 22px; cursor:pointer;
+           background:var(--accent); color:var(--bg); transition:background .15s,color .15s; }
+  button:hover { background:transparent; color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  button.small { padding:5px 14px; font-size:11px; line-height:14px; }
+  button.cold { border-color:var(--ice); background:var(--ice); }
+  button.cold:hover { background:transparent; color:var(--ice); }
+  button.ghost { background:transparent; color:var(--muted); border-color:var(--line); }
+  button.ghost:hover { color:var(--ink); border-color:var(--muted); }
+  /* What the last suspend and resume cost. */
+  .stats { display:grid; grid-template-columns:repeat(4, 1fr); border-bottom:1px solid var(--line);
+           font:11px/15px var(--mono); text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .stats div { padding:8px 14px; border-right:1px solid var(--line); min-width:0; }
+  .stats div:last-child { border-right:0; }
+  .stats b { display:block; font:500 15px/20px var(--mono); letter-spacing:0; text-transform:none; color:var(--ink); }
+  .stats b.cold { color:var(--ice); }
+  @media (max-width: 640px) { .stats { grid-template-columns:repeat(2, 1fr); }
+    .stats div:nth-child(2) { border-right:0; } .stats div:nth-child(-n+2) { border-bottom:1px solid var(--line); } }
+  .body { position:relative; flex:1; min-height:0; display:flex; }
+  .term { flex:1; padding:8px 10px; min-height:0; min-width:0; transition:filter .4s, opacity .4s; }
+  .term.frozen { filter:saturate(0) blur(1px); opacity:.35; }
+  .overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+             justify-content:center; gap:16px; padding:24px; text-align:center; background:var(--term); }
+  .overlay.glass { background:rgba(23,48,41,.55); }
+  .overlay[hidden] { display:none; }
+  .overlay p { margin:0; max-width:520px; color:var(--muted); font-size:15px; }
+  .overlay .prompt { font:14px/20px var(--mono); color:var(--mint); }
+  .overlay .big { font:500 34px/40px var(--mono); color:var(--ice); letter-spacing:-0.5px; }
+  .overlay .row { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+  .spinner { width:18px; height:18px; border:2px solid var(--line); border-top-color:var(--accent);
+             border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #toast { color:var(--mint); text-transform:none; letter-spacing:0; }
+  #toast.warn { color:var(--warn); }
+</style>
+<script>
+  if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("embed");
+</script>
+</head>
+<body>
+  <header>
+    <h1>Chalk sandbox suspend</h1>
+    <p>Suspend a live terminal to storage and resume it later: same sandbox id, same processes, same memory. Rendered with ghostty-web.</p>
+  </header>
+  <div class="frame">
+    <div class="topbar">
+      <span class="left"><span class="dot" id="dot"></span><span id="stateLabel">not started</span><span id="sid"></span></span>
+      <span class="right"><span id="timer"></span>
+        <button class="small" id="actionBtn" hidden disabled>Suspend</button></span>
+    </div>
+    <div class="stats">
+      <div>Suspend<b id="sSuspend">–</b></div>
+      <div>Memory captured<b id="sMemory">–</b></div>
+      <div>Time cold<b id="sCold" class="cold">–</b></div>
+      <div>Resume<b id="sResume">–</b></div>
+    </div>
+    <div class="body">
+      <div class="term" id="term"></div>
+      <div class="overlay" id="overlay"></div>
+    </div>
+  </div>
+
+<script type="module">
+import { init, Terminal, FitAddon } from "./static/ghostty-web.js";
+
+const $ = (id) => document.getElementById(id);
+const THEME = {
+  background: "#173029", foreground: "#EFF5F3", cursor: "#BBD96D", cursorAccent: "#173029",
+  selectionBackground: "#32645B",
+  black: "#0C3129", red: "#F8947F", green: "#70CD96", yellow: "#F3F662",
+  blue: "#81CEEA", magenta: "#B29AF9", cyan: "#73D19C", white: "#EFF5F3",
+  brightBlack: "#648680", brightRed: "#F57596", brightGreen: "#BBD96D", brightYellow: "#F3F662",
+  brightBlue: "#C2FAFC", brightMagenta: "#B5A3FC", brightCyan: "#C0EAD4", brightWhite: "#FFFFFF",
+};
+const ENDED_TEXT = {
+  exited: "The shell exited, and this sandbox has been deleted.",
+  idle: "This sandbox was idle for a while, so it has been deleted.",
+  time_limit: "Time's up. Demo sandboxes get a few minutes of running time, then they are deleted.",
+  suspend_expired: "This sandbox stayed suspended past the demo's limit, so it and its checkpoint have been deleted.",
+  resume_expired: "That suspended sandbox is gone: the demo keeps them for 15 minutes.",
+  error: "Something went wrong with this sandbox.",
+};
+const TOKEN_KEY = "chalk-sandbox-suspend-token";
+
+// The embedding page records these as `demo: interacted`. Only fixed action names and short
+// fixed labels are sent, never anything typed into the terminal.
+function report(action, label) {
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: "chalk-demo-interaction", action, label }, "*");
+  }
+}
+
+function savedToken() {
+  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+}
+function saveToken(token) {
+  try { token ? localStorage.setItem(TOKEN_KEY, token) : localStorage.removeItem(TOKEN_KEY); } catch {}
+}
+
+await init();
+
+const term = new Terminal({ cursorBlink: true, fontSize: 13, scrollback: 5000, theme: THEME,
+                            fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace' });
+const fit = new FitAddon();
+term.loadAddon(fit);
+term.open($("term"));
+fit.observeResize();
+fit.fit();
+// Exposed for browser tests, which read the terminal buffer since ghostty draws to a canvas.
+window.term = term;
+
+let ws = null;
+let phase = "idle";  // idle | starting | running | suspending | suspended | resuming | ended
+let budget = 0;      // running seconds left; paused while suspended
+let coldSince = 0;
+let ticker = null;
+
+function setPhase(next, label) {
+  phase = next;
+  window.demoPhase = next;
+  const dot = $("dot");
+  dot.className = "dot " + ({ running: "running", suspended: "cold", suspending: "busy", resuming: "busy", starting: "busy" }[next] || "");
+  $("stateLabel").textContent = label || next;
+  const btn = $("actionBtn");
+  btn.hidden = !["running", "suspending", "suspended", "resuming"].includes(next);
+  btn.disabled = !(next === "running" || next === "suspended");
+  btn.textContent = next === "suspended" || next === "resuming" ? "Resume" : "Suspend";
+  btn.className = "small" + (next === "suspended" ? " cold" : "");
+  $("term").classList.toggle("frozen", next === "suspended" || next === "suspending" || next === "resuming");
+}
+
+function fmtMs(ms) { return ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms} ms`; }
+function fmtBytes(b) { return b == null ? "n/a" : b >= 1 << 30 ? `${(b / (1 << 30)).toFixed(2)} GiB` : `${Math.round(b / (1 << 20))} MiB`; }
+function fmtClock(s) { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+
+function tick() {
+  if (phase === "running") {
+    budget = Math.max(0, budget - 1);
+    $("timer").textContent = `${fmtClock(budget)} running time left`;
+  } else if (phase === "suspended" || phase === "resuming") {
+    const cold = (Date.now() - coldSince) / 1000;
+    $("timer").textContent = `cold ${fmtClock(cold)} · clock paused at ${fmtClock(budget)}`;
+    $("sCold").textContent = `${cold.toFixed(0)} s`;
+    const big = $("overlay").querySelector(".big");
+    if (big) big.textContent = fmtClock(cold);
+  }
+}
+
+function showOverlay(html, glass = false) {
+  const o = $("overlay");
+  o.className = "overlay" + (glass ? " glass" : "");
+  o.innerHTML = html;
+  o.hidden = false;
+  return o;
+}
+function hideOverlay() { $("overlay").hidden = true; }
+
+function coldOverlay() {
+  const o = showOverlay(`
+    <div class="prompt">SuspendSandbox(id) → status SUSPENDED · 0 vCPU · 0 GiB held</div>
+    <div class="big">0:00</div>
+    <p>The sandbox is a checkpoint in storage now. Nothing is running and no compute is reserved. Resume brings back the same sandbox id, with every process where it left off.</p>
+    <div class="row"><button class="cold" data-act="resume">Resume</button></div>`, true);
+  o.querySelector("[data-act=resume]").addEventListener("click", () => doResume("overlay"));
+}
+
+function connect(resumeToken) {
+  const url = new URL("ws", location.href);
+  url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("cols", term.cols);
+  url.searchParams.set("rows", term.rows);
+  if (resumeToken) url.searchParams.set("resume", resumeToken);
+  ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  let ended = null;
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) { term.write(new Uint8Array(ev.data)); return; }
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "status") {
+      showOverlay(`<div class="spinner"></div><p></p>`).querySelector("p").textContent = msg.message;
+    } else if (msg.type === "ready") {
+      budget = msg.expires_in;
+      $("sid").textContent = `· ${msg.sandbox}`;
+      hideOverlay();
+      setPhase("running", "running");
+      if (msg.resumed) { saveToken(null); toast("Resumed the sandbox you suspended earlier."); }
+      term.focus();
+    } else if (msg.type === "suspended") {
+      saveToken(msg.token);
+      coldSince = Date.now();
+      $("sSuspend").textContent = fmtMs(msg.suspend_ms);
+      $("sMemory").textContent = fmtBytes(msg.memory_bytes);
+      $("sCold").textContent = "0 s";
+      setPhase("suspended", "suspended");
+      coldOverlay();
+      toast(`Checkpointed in ${fmtMs(msg.suspend_ms)}. Close this tab if you like: it keeps for ${Math.round(msg.keep_seconds / 60)} minutes.`);
+    } else if (msg.type === "resumed") {
+      saveToken(null);
+      budget = msg.expires_in;
+      $("sResume").textContent = fmtMs(msg.resume_ms);
+      $("sCold").textContent = `${(msg.cold_ms / 1000).toFixed(0)} s`;
+      if (msg.sandbox) $("sid").textContent = `· ${msg.sandbox}`;
+      hideOverlay();
+      setPhase("running", "running");
+      toast(msg.new_id
+        ? `Restored from the checkpoint into a new sandbox id in ${fmtMs(msg.resume_ms)}: same processes, same memory.`
+        : `Resumed in ${fmtMs(msg.resume_ms)} after ${(msg.cold_ms / 1000).toFixed(1)} s cold.`);
+      term.focus();
+    } else if (msg.type === "action_failed") {
+      const wasSuspending = phase === "suspending";
+      report("action_failed", wasSuspending ? "suspend" : "resume");
+      if (wasSuspending) { setPhase("running", "running"); hideOverlay(); }
+      else { setPhase("suspended", "suspended"); coldOverlay(); }
+      toast(msg.message, true);
+    } else if (msg.type === "busy" || msg.type === "limited") {
+      ended = msg.message;
+    } else if (msg.type === "ended") {
+      ended = ENDED_TEXT[msg.reason] || ENDED_TEXT.exited;
+      if (msg.reason !== "exited") report("session_ended", msg.reason);
+      if (msg.reason === "resume_expired" || msg.reason === "suspend_expired") saveToken(null);
+    }
+  };
+  ws.onclose = () => {
+    ws = null;
+    const wasSuspended = phase === "suspended";
+    if (!wasSuspended) saveToken(null);
+    setPhase("ended", "ended");
+    $("sid").textContent = "";
+    $("timer").textContent = "";
+    showLauncher(ended || (wasSuspended
+      ? "The connection closed. Your sandbox is still suspended; resume it below."
+      : "The connection closed, and this sandbox has been deleted."));
+  };
+}
+
+function toast(text, warn = false) {
+  let el = $("toast");
+  if (!el) { el = document.createElement("span"); el.id = "toast"; $("stateLabel").after(el); }
+  el.textContent = " · " + text;
+  el.classList.toggle("warn", warn);
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => { el.textContent = ""; }, 9000);
+}
+
+function doSuspend() {
+  if (phase !== "running" || !ws) return;
+  report("suspend", "suspend");
+  setPhase("suspending", "suspending…");
+  showOverlay(`<div class="spinner"></div><p>Detaching the terminal and checkpointing the sandbox, memory included…</p>`, true);
+  ws.send(JSON.stringify({ type: "suspend" }));
+}
+
+function doResume(source) {
+  if (phase !== "suspended" || !ws) return;
+  report("resume", source);
+  setPhase("resuming", "resuming…");
+  showOverlay(`<div class="spinner"></div><p>ResumeSandbox(id): restoring the checkpoint on a host with room…</p>`, true);
+  ws.send(JSON.stringify({ type: "resume" }));
+}
+
+$("actionBtn").addEventListener("click", () => (phase === "suspended" ? doResume("toolbar") : doSuspend()));
+term.onData((data) => phase === "running" && ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "input", data })));
+term.onResize(({ cols, rows }) => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: "resize", cols, rows })));
+
+// The empty state. Nothing connects until the visitor asks, so an embedding page does not start
+// sandboxes on load; a visitor who suspended and left gets a resume button instead.
+function showLauncher(previous) {
+  const token = savedToken();
+  const o = showOverlay(`
+    <div class="prompt">SuspendSandbox(id) · ResumeSandbox(id)</div>
+    <p></p>
+    <div class="row">${token ? `<button class="cold" data-act="saved">Resume suspended sandbox</button>` : ""}
+      <button class="${token ? "ghost" : ""}" data-act="launch">Launch ${token ? "a new" : ""} sandbox</button></div>`);
+  o.querySelector("p").textContent = previous ||
+    (token ? "You suspended a sandbox here earlier. It's still a checkpoint in storage: resume it, or start fresh."
+           : "Get a gVisor-isolated Linux sandbox and start something: a counter, a Python REPL. Press Suspend and the whole sandbox, memory included, goes into storage with no compute held. Resume brings it back exactly as it was.");
+  o.querySelector("[data-act=launch]").addEventListener("click", () => {
+    saveToken(null);
+    report("launch", "launch");
+    term.reset();
+    for (const id of ["sSuspend", "sMemory", "sCold", "sResume"]) $(id).textContent = "–";
+    setPhase("starting", "starting");
+    showOverlay(`<div class="spinner"></div><p>Starting a fresh sandbox…</p>`);
+    connect(null);
+  });
+  o.querySelector("[data-act=saved]")?.addEventListener("click", () => {
+    report("resume_saved", "saved");
+    term.reset();
+    coldSince = Date.now();
+    setPhase("resuming", "resuming…");
+    showOverlay(`<div class="spinner"></div><p>Resuming your suspended sandbox…</p>`);
+    connect(token);
+  });
+}
+
+ticker = setInterval(tick, 1000);
+setPhase("idle", "not started");
+showLauncher(null);
+</script>
+</body>
+</html>
