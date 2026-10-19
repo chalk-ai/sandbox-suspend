@@ -70,7 +70,7 @@ terminal is a host PTY. A resume attaches a fresh client to the same tmux server
 
 You need [`uv`](https://docs.astral.sh/uv/) and a Chalk environment with sandboxes and sandbox
 snapshots enabled, since a suspend is a checkpoint. Checkpoints need host-backed sandboxes
-(`ComputeClass.HOST`). Credentials come from `chalk config` in the current directory. You can also
+(`ComputeClass.HOST`). Credentials come from the SDK’s ambient credentials from `chalk login`. You can also
 set `CHALK_API_SERVER`, `CHALK_CLIENT_ID`, `CHALK_CLIENT_SECRET` and `CHALK_ENVIRONMENT_ID` yourself.
 
 ```bash
@@ -163,3 +163,10 @@ good, discard any that remain by resuming and then terminating them.
 ## License
 
 Apache-2.0. ghostty-web is MIT.
+
+## Local authentication
+
+The SDK reads credentials, API host, and the selected environment from your existing
+`chalk login` in `~/.chalk.yml`, including project-scoped and default logins.
+For unattended runs, `CHALK_CLIENT_ID` and `CHALK_CLIENT_SECRET` remain supported. Where available, `--env-id`
+overrides the target environment; otherwise the SDK uses your login or environment settings.
