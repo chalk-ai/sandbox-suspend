@@ -55,7 +55,7 @@ from chalkcompute import (
 
 # Interactive PTY sessions are exposed through the session client, which is not yet part of
 # the public chalkcompute namespace.
-from chalkcompute._connect import ConnectClient
+from chalkcompute import ConnectClient
 from chalkcompute._container import ContainerSessionClient
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -344,12 +344,11 @@ class SuspendClient:
     def __init__(self) -> None:
         super().__init__()
         self.connect = ConnectClient()
-        self.connect._ensure_auth()
-        self.api = (self.connect._api_server or "").rstrip("/")
+        self.api = self.connect.api_server
         self.http = httpx.Client(timeout=120)
 
     def _call(self, method: str, body: dict[str, Any]) -> dict[str, Any]:
-        headers = dict(self.connect._rpc_metadata() or [])
+        headers = self.connect.request_headers()
         headers["content-type"] = "application/json"
         resp = self.http.post(f"{self.api}/{method}", json=body, headers=headers)
         if resp.status_code != 200:

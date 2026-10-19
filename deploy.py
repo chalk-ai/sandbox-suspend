@@ -2,7 +2,7 @@
 #
 # /// script
 # requires-python = ">=3.12,<3.14"
-# dependencies = ["chalkcompute==2.13.5"]
+# dependencies = ["chalkcompute>=2.13.8"]
 # ///
 """Deploy the sandbox suspend/resume demo (server.py + index.html) as a Chalk ScalingGroup.
 
@@ -18,7 +18,6 @@ Then open the printed URL, press "Launch sandbox", start something, and press "S
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 
@@ -38,27 +37,12 @@ FETCH_GHOSTTY = (
 )
 
 
-def configure_chalk() -> None:
-    """Resolve deployment routing settings using the SDK's ambient login."""
-    from chalkcompute import ConnectClient
-
-    client = ConnectClient()
-    try:
-        client._ensure_auth()
-        # Only routing settings are needed by the deployed app; credentials stay in the SDK.
-        os.environ["CHALK_API_SERVER"] = client._api_server
-        os.environ["CHALK_ENVIRONMENT_ID"] = client._env_id
-    finally:
-        client.close()
-
-
 def main() -> None:
-    configure_chalk()
     from chalkcompute import Image, ScalingGroup
 
     image = (
         Image.debian_slim(python_version="3.12")
-        .pip_install(["chalkcompute==2.13.5", "fastapi==0.116.1", "uvicorn[standard]==0.35.0", "httpx==0.28.1"])
+        .pip_install(["chalkcompute>=2.13.8", "fastapi==0.116.1", "uvicorn[standard]==0.35.0", "httpx==0.28.1"])
         .run_commands(FETCH_GHOSTTY)
         # Together the two files exceed the 32 KiB inline-copy limit, so they ship as a mounted
         # volume. A volume shadows its whole directory, so it gets one of its own.
@@ -74,7 +58,6 @@ def main() -> None:
         memory="2Gi",
         env={
             # Not a secret: which API the server's workload identity talks to.
-            "CHALK_API_SERVER": os.environ["CHALK_API_SERVER"],
             "PORT": "8080",
             "TERMINAL_STATIC_DIR": STATIC_DIR,
             "TERMINAL_MAX_RUNNING": '8',
