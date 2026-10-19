@@ -12,13 +12,12 @@ identity at all. Snapshots must be enabled for the environment, since a suspend 
 
 Credentials for the deploy itself come from your existing `chalk login` (or the
 CHALK_* env vars):
-    ./deploy.py [--env-id <environment>] [--name sandbox-suspend]
+    ./deploy.py
 Then open the printed URL, press "Launch sandbox", start something, and press "Suspend".
 """
 
 from __future__ import annotations
 
-import argparse
 import os
 import time
 from pathlib import Path
@@ -39,12 +38,10 @@ FETCH_GHOSTTY = (
 )
 
 
-def configure_chalk(env_id: str | None) -> None:
+def configure_chalk() -> None:
     """Resolve deployment routing settings using the SDK's ambient login."""
     from chalkcompute import ConnectClient
 
-    if env_id:
-        os.environ["CHALK_ENVIRONMENT"] = env_id
     client = ConnectClient()
     try:
         client._ensure_auth()
@@ -56,17 +53,7 @@ def configure_chalk(env_id: str | None) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--name", default="sandbox-suspend")
-    # Defaults to the environment in your existing `chalk login` (or CHALK_ENVIRONMENT_ID).
-    parser.add_argument("--env-id", default=None)
-    parser.add_argument("--max-running", default="8")
-    parser.add_argument("--max-suspended", default="24")
-    parser.add_argument("--warm-pool", default="2")
-    parser.add_argument("--ready-timeout", type=float, default=900.0)
-    args = parser.parse_args()
-
-    configure_chalk(args.env_id)
+    configure_chalk()
     from chalkcompute import Image, ScalingGroup
 
     image = (
@@ -82,7 +69,7 @@ def main() -> None:
 
     sg = ScalingGroup(
         image=image,
-        name=args.name,
+        name='sandbox-suspend',
         cpu="1",
         memory="2Gi",
         env={
@@ -90,9 +77,9 @@ def main() -> None:
             "CHALK_API_SERVER": os.environ["CHALK_API_SERVER"],
             "PORT": "8080",
             "TERMINAL_STATIC_DIR": STATIC_DIR,
-            "TERMINAL_MAX_RUNNING": args.max_running,
-            "TERMINAL_MAX_SUSPENDED": args.max_suspended,
-            "TERMINAL_WARM_POOL": args.warm_pool,
+            "TERMINAL_MAX_RUNNING": '8',
+            "TERMINAL_MAX_SUSPENDED": '24',
+            "TERMINAL_WARM_POOL": '2',
         },
         entrypoint=["python", f"{APP_DIR}/server.py"],
         port=8080,
@@ -105,7 +92,7 @@ def main() -> None:
     )
     t0 = time.monotonic()
     try:
-        sg.deploy(build_timeout=1800.0, ready_timeout=args.ready_timeout)
+        sg.deploy(build_timeout=1800.0, ready_timeout=900.0)
     finally:
         print(f"deploy returned after {time.monotonic() - t0:.0f}s")
     print("web_url:", sg.web_url)
